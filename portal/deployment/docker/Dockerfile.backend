@@ -1,14 +1,25 @@
+# Stage 1: Build
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
+# Copy solution and project files first (for layer caching)
+COPY portal/backend/src/Portal.sln ./
+COPY portal/backend/src/Portal.Api/Portal.Api.csproj ./Portal.Api/
+COPY portal/backend/src/Portal.Domain/Portal.Domain.csproj ./Portal.Domain/
+COPY portal/backend/src/Portal.Infrastructure/Portal.Infrastructure.csproj ./Portal.Infrastructure/
+
+# Restore dependencies
+RUN dotnet restore Portal.sln
+
+# Copy all source files
 COPY portal/backend/src/Portal.Api/ ./Portal.Api/
 COPY portal/backend/src/Portal.Domain/ ./Portal.Domain/
 COPY portal/backend/src/Portal.Infrastructure/ ./Portal.Infrastructure/
 
-WORKDIR /src/Portal.Api
-RUN dotnet restore
-RUN dotnet publish -c Release -o /app
+# Build and publish
+RUN dotnet publish ./Portal.Api/Portal.Api.csproj -c Release -o /app --no-restore
 
+# Stage 2: Runtime
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
 COPY --from=build /app ./
