@@ -1,34 +1,49 @@
+# Run from repo root: docker-compose -f portal/deployment/docker/docker-compose.yml up --build
+
 services:
   portal-backend:
     build:
-      context: ../..
-      dockerfile: deployment/docker/Dockerfile.backend
+      context: ../../..  # repo root
+      dockerfile: portal/deployment/docker/Dockerfile.backend
     environment:
+      - ASPNETCORE_ENVIRONMENT=Development
       - CoreApi__BaseUrl=https://localhost:5005
       - ConnectionStrings__PortalDatabase=Server=db;Database=PortalDb;User Id=sa;Password=YourStrong@Password;
+      - Auth__Authority=https://login.microsoftonline.com/YOUR_TENANT_ID/v2.0
+      - Auth__Audience=YOUR_CLIENT_ID
     ports:
       - "5000:5000"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+    restart: unless-stopped
 
   portal-frontend:
     build:
-      context: ../..
-      dockerfile: deployment/docker/Dockerfile.frontend
+      context: ../../..  # repo root
+      dockerfile: portal/deployment/docker/Dockerfile.frontend
     ports:
       - "3000:80"
     depends_on:
       - portal-backend
+    restart: unless-stopped
 
   db:
     image: mcr.microsoft.com/mssql/server:2022-latest
     environment:
       SA_PASSWORD: "YourStrong@Password"
       ACCEPT_EULA: "Y"
+      MSSQL_PID: "Express"
     ports:
       - "1433:1433"
     volumes:
       - sqldata:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P YourStrong@Password -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
 
 volumes:
   sqldata:
