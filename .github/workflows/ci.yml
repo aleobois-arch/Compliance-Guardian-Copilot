@@ -18,14 +18,14 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Restore dependencies
-        run: dotnet restore portal/backend/Portal.Api/Portal.Api.csproj
+      - name: Restore solution
+        run: dotnet restore portal/backend/src/Portal.sln
 
-      - name: Build
-        run: dotnet build portal/backend/Portal.Api/Portal.Api.csproj --no-restore --configuration Release
+      - name: Build solution
+        run: dotnet build portal/backend/src/Portal.sln --no-restore --configuration Release
 
-      - name: Test
-        run: dotnet test portal/backend/Portal.Api/Portal.Api.csproj --no-build --configuration Release --verbosity normal
+      - name: Run tests
+        run: dotnet test portal/backend/src/Portal.sln --no-build --configuration Release --verbosity normal
 
   build-frontend:
     name: Build React Frontend
@@ -44,12 +44,12 @@ jobs:
         working-directory: portal/frontend
         run: npm ci
 
-      - name: Build
+      - name: Type-check
         working-directory: portal/frontend
         run: npm run build
 
   docker-build:
-    name: Docker Build (backend + frontend)
+    name: Docker Build Verification
     runs-on: ubuntu-latest
     needs: [build-backend, build-frontend]
     steps:
@@ -57,8 +57,10 @@ jobs:
 
       - name: Build backend Docker image
         run: |
-          docker build -f portal/deployment/docker/Dockerfile.backend -t compliance-portal-backend:ci .
+          docker build -f portal/deployment/docker/Dockerfile.backend \
+            -t compliance-portal-backend:ci .
 
       - name: Build frontend Docker image
         run: |
-          docker build -f portal/deployment/docker/Dockerfile.frontend -t compliance-portal-frontend:ci .
+          docker build -f portal/deployment/docker/Dockerfile.frontend \
+            -t compliance-portal-frontend:ci .
