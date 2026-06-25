@@ -1,10 +1,32 @@
 import type { ContractAnalysisResult, ContractSummary, SubmitContractRequest } from './types';
+import { msalInstance, loginRequest } from './authConfig';
 
-const BASE_URL = '/api';
+// Fix: BASE_URL aligned with Vite proxy (/portal -> http://localhost:5000)
+const BASE_URL = '/portal';
 
+/**
+ * Fix: Replace localStorage token stub with proper MSAL token acquisition.
+ * Acquires a token silently first; falls back to redirect if needed.
+ */
 async function getAuthToken(): Promise<string> {
-  // Replace with your MSAL or token acquisition logic
-  return localStorage.getItem('access_token') ?? '';
+  const accounts = msalInstance.getAllAccounts();
+  if (accounts.length === 0) {
+    // No active account - trigger redirect login
+    await msalInstance.loginRedirect(loginRequest);
+    return '';
+  }
+
+  try {
+    const response = await msalInstance.acquireTokenSilent({
+      ...loginRequest,
+      account: accounts[0],
+    });
+    return response.accessToken;
+  } catch {
+    // Silent acquisition failed - fall back to redirect
+    await msalInstance.acquireTokenRedirect(loginRequest);
+    return '';
+  }
 }
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
@@ -25,16 +47,16 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export async function submitContract(req: SubmitContractRequest): Promise<ContractAnalysisResult> {
-  return apiFetch<ContractAnalysisResult>('/portal/contracts/submit', {
+  return apiFetch<ContractAnalysisResult>('/contracts/submit', {
     method: 'POST',
     body: JSON.stringify(req),
   });
 }
 
 export async function getContracts(): Promise<ContractSummary[]> {
-  return apiFetch<ContractSummary[]>('/portal/contracts');
+  return apiFetch<ContractSummary[]>('/contracts');
 }
 
 export async function getContractById(id: string): Promise<ContractAnalysisResult> {
-  return apiFetch<ContractAnalysisResult>(`/portal/contracts/${id}`);
+  return apiFetch<ContractAnalysisResult>(`/contracts/${id}`);
 }
