@@ -1,0 +1,34 @@
+services:
+  portal-backend:
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile.backend
+    environment:
+      - CoreApi__BaseUrl=https://localhost:5005
+      - ConnectionStrings__PortalDatabase=Server=db;Database=PortalDb;User Id=sa;Password=YourStrong@Password;
+    ports:
+      - "5000:5000"
+    depends_on:
+      - db
+
+  portal-frontend:
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile.frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - portal-backend
+
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      SA_PASSWORD: "YourStrong@Password"
+      ACCEPT_EULA: "Y"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqldata:/var/opt/mssql
+
+volumes:
+  sqldata:
