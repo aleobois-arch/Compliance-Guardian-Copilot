@@ -1,5 +1,9 @@
 using System.Net.Http.Json;
+using System.Text.Json;
+using Azure;
+using Azure.AI.FormRecognizer.DocumentAnalysis;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Portal.Domain;
 
 namespace Portal.Infrastructure;
@@ -20,6 +24,18 @@ public class PortalDbContext : Microsoft.EntityFrameworkCore.DbContext
 
     public Microsoft.EntityFrameworkCore.DbSet<PortalContractEntity> Contracts =>
         Set<PortalContractEntity>();
+
+    public Microsoft.EntityFrameworkCore.DbSet<PortalRiskFindingEntity> RiskFindings =>
+        Set<PortalRiskFindingEntity>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<PortalRiskFindingEntity>()
+            .HasOne<PortalContractEntity>()
+            .WithMany(c => c.Findings)
+            .HasForeignKey(f => f.ContractId)
+            .OnDelete(DeleteBehavior.Cascade);
+    }
 }
 
 // === Service ===
@@ -27,22 +43,44 @@ public class PortalContractService : IPortalContractService
 {
     private readonly HttpClient _coreClient;
     private readonly PortalDbContext _db;
+    private readonly ILogger<PortalContractService> _logger;
+    private readonly DocumentAnalysisClient? _documentAnalysisClient;
 
-    public PortalContractService(HttpClient coreClient, PortalDbContext db)
+    public PortalContractService(
+        HttpClient coreClient,
+        PortalDbContext db,
+        ILogger<PortalContractService> logger,
+        DocumentAnalysisClient? documentAnalysisClient = null)
     {
         _coreClient = coreClient;
         _db = db;
+        _logger = logger;
+        _documentAnalysisClient = documentAnalysisClient;
     }
 
     public async Task<PortalContractResult> SubmitAndAnalyzeAsync(
         PortalContractUploadRequest request)
     {
         var contractId = Guid.NewGuid().ToString();
+        _logger.LogInformation("Starting analysis for contract {ContractId}, file {FileName}",
+            contractId, request.FileName);
+
+        string rawText;
+        try
+        {
+            rawText = await DecodeDocumentAsync(request.Base64Content);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Document extraction failed for {ContractId}, falling back to raw text", contractId);
+            rawText = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(request.Base64Content));
+        }
+
         var coreRequest = new
         {
             id = contractId,
             title = request.FileName,
-            rawText = DecodeDocument(request.Base64Content),
+            rawText,
             sourceSystem = "Portal"
         };
 
@@ -53,14 +91,15 @@ public class PortalContractService : IPortalContractService
             response.EnsureSuccessStatusCode();
             var coreResult = await response.Content.ReadFromJsonAsync<CoreContractAnalysisResult>();
             portalResult = MapCoreResult(coreResult!);
+            _logger.LogInformation("Core API analysis succeeded for {ContractId}", contractId);
         }
-        catch
+        catch (Exception ex)
         {
-            // Fallback si l'API principale n'est pas encore disponible
+            _logger.LogWarning(ex, "Core API unavailable for {ContractId}, using fallback result", contractId);
             portalResult = new PortalContractResult
             {
                 ContractId = contractId,
-                Summary = "Analyse en attente - API principale non disponible.",
+                Summary = "Analysis pending - core API unavailable.",
                 Findings = new List<RiskFinding>()
             };
         }
@@ -75,24 +114,48 @@ public class PortalContractService : IPortalContractService
                 .Select(f => f.Level).OrderByDescending(l => l)
                 .FirstOrDefault() ?? "Low",
             Summary = portalResult.Summary,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow,
+            Findings = portalResult.Findings.Select(f => new PortalRiskFindingEntity
+            {
+                ContractId = portalResult.ContractId,
+                ClauseReference = f.ClauseReference,
+                Description = f.Description,
+                Level = f.Level,
+                Recommendation = f.Recommendation
+            }).ToList()
         };
 
         _db.Contracts.Add(entity);
         await _db.SaveChangesAsync();
+        _logger.LogInformation("Persisted contract {ContractId} with {FindingCount} findings",
+            contractId, entity.Findings.Count);
+
         return portalResult;
     }
 
     public async Task<PortalContractResult?> GetAnalysisAsync(string contractId)
     {
         var entity = await _db.Contracts
+            .Include(c => c.Findings)
             .FirstOrDefaultAsync(c => c.ContractId == contractId);
-        if (entity is null) return null;
+
+        if (entity is null)
+        {
+            _logger.LogWarning("Contract {ContractId} not found", contractId);
+            return null;
+        }
+
         return new PortalContractResult
         {
             ContractId = entity.ContractId,
             Summary = entity.Summary,
-            Findings = new List<RiskFinding>()
+            Findings = entity.Findings.Select(f => new RiskFinding
+            {
+                ClauseReference = f.ClauseReference,
+                Description = f.Description,
+                Level = f.Level,
+                Recommendation = f.Recommendation
+            }).ToList()
         };
     }
 
@@ -100,6 +163,7 @@ public class PortalContractService : IPortalContractService
     {
         var entities = await _db.Contracts
             .OrderByDescending(c => c.CreatedAt).ToListAsync();
+
         return entities.Select(e => new PortalContractSummary
         {
             ContractId = e.ContractId,
@@ -111,22 +175,39 @@ public class PortalContractService : IPortalContractService
         }).ToList();
     }
 
-    private static PortalContractResult MapCoreResult(CoreContractAnalysisResult r)
-        => new()
+    private async Task<string> DecodeDocumentAsync(string base64Content)
+    {
+        if (_documentAnalysisClient is null)
         {
-            ContractId = r.ContractId,
-            Summary = r.Summary,
-            Findings = r.Findings.Select(f => new RiskFinding
-            {
-                ClauseReference = f.ClauseReference,
-                Description = f.Description,
-                Level = f.Level,
-                Recommendation = f.Recommendation
-            }).ToList()
-        };
+            _logger.LogWarning("DocumentAnalysisClient not configured, falling back to base64 decode");
+            return System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(base64Content));
+        }
 
-    private static string DecodeDocument(string base64Content)
-        => "Texte extrait (TODO: Azure Cognitive Services).";
+        var bytes = Convert.FromBase64String(base64Content);
+        using var stream = new MemoryStream(bytes);
+
+        _logger.LogInformation("Sending document to Azure Document Intelligence");
+        var operation = await _documentAnalysisClient.AnalyzeDocumentAsync(
+            WaitUntil.Completed, "prebuilt-read", stream);
+
+        var result = operation.Value;
+        var text = string.Join("\n", result.Pages.SelectMany(p => p.Lines).Select(l => l.Content));
+        _logger.LogInformation("Extracted {CharCount} characters from document", text.Length);
+        return text;
+    }
+
+    private static PortalContractResult MapCoreResult(CoreContractAnalysisResult r) => new()
+    {
+        ContractId = r.ContractId,
+        Summary = r.Summary,
+        Findings = r.Findings.Select(f => new RiskFinding
+        {
+            ClauseReference = f.ClauseReference,
+            Description = f.Description,
+            Level = f.Level,
+            Recommendation = f.Recommendation
+        }).ToList()
+    };
 
     private class CoreContractAnalysisResult
     {
