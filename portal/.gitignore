@@ -1,0 +1,39 @@
+# ========================
+# .NET Backend
+# ========================
+portal/backend/src/**/bin/
+portal/backend/src/**/obj/
+portal/backend/src/**/*.user
+portal/backend/src/**/*.suo
+portal/backend/src/**/.vs/
+portal/backend/src/**/appsettings.Development.json
+portal/backend/src/**/appsettings.local.json
+
+# EF Core Migrations (keep directory structure but ignore snapshots if needed)
+# portal/backend/src/Portal.Infrastructure/Migrations/
+
+# ========================
+# React Frontend
+# ========================
+portal/frontend/node_modules/
+portal/frontend/dist/
+portal/frontend/.env
+portal/frontend/.env.local
+portal/frontend/.env.*.local
+portal/frontend/coverage/
+
+# ========================
+# Docker
+# ========================
+portal/deployment/docker/.env
+
+# ========================
+# General
+# ========================
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+.vscode/
+*.swp
+*~
